@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Fix `forge()` failing with "probabilities do not sum to 1" when leaves hold a single observation: leaf coverage is renormalised within each tree (#4)
+- Fix `forde(oob=True)`, which referenced a missing attribute; out-of-bag rows now come from the public `estimators_samples_`
+- Drop the deprecated `copy=` argument of `DataFrame.set_axis` (pandas 3)
 - Fix compatibility with NumPy 2 and pandas 3 (`np.in1d` → `np.isin`, positional Series access via `.iloc`)
 - Migrate packaging from `setup.py` to `pyproject.toml` (uv / hatchling)
 - Fix the twomoons example notebook: define a held-out `df_test` via `train_test_split` and drop a redundant resampling step
