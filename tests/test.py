@@ -87,4 +87,5 @@ if __name__ == '__main__':
     from test_iris import TestIris
     from test_diabetes import TestDiabetes
     from test_regressions import TestRegressions
+    from test_random_state import TestRandomState
     unittest.main()

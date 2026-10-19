@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils import check_random_state
 import scipy
 from arfpy import utils
 
@@ -26,8 +27,10 @@ class arf:
   :type verbose: bool, optional
   :param min_node_size: minimum number of samples in terminal node, defaults to 5 
   :type min_node_size: int
+  :param random_state: Seed or numpy RandomState for the shuffles, the forests and later forge() calls. None (the default) uses numpy's global random state, as before, defaults to None
+  :type random_state: int, numpy.random.RandomState or None, optional
   """   
-  def __init__(self, x,  num_trees = 30, delta = 0,  max_iters =10, early_stop = True, verbose = True, min_node_size = 5, **kwargs):
+  def __init__(self, x,  num_trees = 30, delta = 0,  max_iters =10, early_stop = True, verbose = True, min_node_size = 5, random_state = None, **kwargs):
 
     # assertions
     assert isinstance(x, pd.core.frame.DataFrame), f"expected pandas DataFrame as input, got:{type(x)}"
@@ -39,6 +42,8 @@ class arf:
 
 
     # initialize values 
+    self.random_state = check_random_state(random_state)
+    rng = self.random_state
     x_real = x.copy()
     self.p = x_real.shape[1]
     self.orig_colnames = list(x_real)
@@ -65,7 +70,7 @@ class arf:
         x_real[col] = x_real[col].cat.codes
     
     # If no synthetic data provided, sample from marginals
-    x_synth = x_real.apply(lambda x: x.sample(frac=1).values)
+    x_synth = x_real.apply(lambda x: x.sample(frac=1, random_state=rng).values)
     
     # Merge real and synthetic data
     x = pd.concat([x_real, x_synth])
@@ -76,7 +81,7 @@ class arf:
     self.x_real = x_real
 
     # Fit initial RF model
-    clf_0 = RandomForestClassifier( oob_score= True, n_estimators=self.num_trees,min_samples_leaf=min_node_size, **kwargs) 
+    clf_0 = RandomForestClassifier( oob_score= True, n_estimators=self.num_trees,min_samples_leaf=min_node_size, random_state=rng, **kwargs) 
     clf_0.fit(x, y)
 
     iters = 0
@@ -110,13 +115,13 @@ class arf:
 
         # sample leafs
         tmp.drop("obs", axis=1, inplace=True)
-        tmp = tmp.sample(x_real.shape[0], axis=0, replace=True)
+        tmp = tmp.sample(x_real.shape[0], axis=0, replace=True, random_state=rng)
         tmp = pd.Series(tmp.value_counts(sort = False ), name = 'cnt').reset_index()
         draw_from = pd.merge(left = tmp, right = x_real_obs, on=['tree', 'leaf'], sort=False )
 
         # sample synthetic data from leaf
         grpd =  draw_from.groupby(['tree', 'leaf'])
-        x_synth = [grpd.get_group(ind).apply(lambda x: x.sample(n=grpd.get_group(ind)['cnt'].iloc[0], replace = True).values) for ind in grpd.indices]
+        x_synth = [grpd.get_group(ind).apply(lambda x: x.sample(n=grpd.get_group(ind)['cnt'].iloc[0], replace = True, random_state=rng).values) for ind in grpd.indices]
         x_synth = pd.concat(x_synth).drop(['cnt', 'tree', 'leaf'], axis=1)
         
         # delete unnecessary objects 
@@ -127,7 +132,7 @@ class arf:
         y = np.concatenate([np.zeros(x_real.shape[0]), np.ones(x_real.shape[0])])
         
         # discrimintator
-        clf_1 = RandomForestClassifier( oob_score= True, n_estimators=self.num_trees, min_samples_leaf=min_node_size,**kwargs) 
+        clf_1 = RandomForestClassifier( oob_score= True, n_estimators=self.num_trees, min_samples_leaf=min_node_size, random_state=rng, **kwargs) 
         clf_1.fit(x, y)
 
         # update iters and check for convergence
@@ -300,11 +305,13 @@ class arf:
     return {"cnt": self.params, "cat": self.class_probs, 
             "forest": self.clf, "meta" : pd.DataFrame(data={"variable": self.orig_colnames, "family": self.dist})}
   # TO DO: optional -- think of dropping f_idx
-  def forge(self, n):
+  def forge(self, n, random_state = None):
     """This part is for data generation (FORGE)
 
     :param n: Number of synthetic samples to generate.
     :type n: int
+    :param random_state: Seed or numpy RandomState for this call. None continues the random state given to arf(), defaults to None
+    :type random_state: int, numpy.random.RandomState or None, optional
     :return: Returns generated data.
     :rtype: pandas.DataFrame
     """
@@ -312,13 +319,14 @@ class arf:
       getattr(self, 'bnds')
     except AttributeError:
       raise AttributeError('need density estimates to generate data -- run .forde() first!')
+    rng = self.random_state if random_state is None else check_random_state(random_state)
 
     # Sample new observations and get their terminal nodes
     # Draw random leaves with probability proportional to coverage
     # Coverage sums to 1 within each tree, so dividing by the total picks a tree uniformly (among trees with any
     # leaf left), then a leaf in proportion to its coverage.
     unique_bnds = self.bnds[['tree', 'nodeid', 'cvg']].drop_duplicates()
-    draws = np.random.choice(a=range(unique_bnds.shape[0]), p = unique_bnds['cvg'] / unique_bnds['cvg'].sum(), size=n)
+    draws = rng.choice(a=range(unique_bnds.shape[0]), p = unique_bnds['cvg'] / unique_bnds['cvg'].sum(), size=n)
     sampled_trees_nodes = unique_bnds[['tree','nodeid']].iloc[draws,].reset_index(drop =True).reset_index().rename(columns={'index': 'obs'})
 
     # Get distributions parameters for each new obs.
@@ -336,7 +344,7 @@ class arf:
       
       if self.factor_cols.iloc[j]:
         # Factor columns: Multinomial distribution
-        data_new.isetitem(j, obs_probs[obs_probs["variable"] == colname].groupby("obs").sample(weights = "prob")["value"].reset_index(drop = True))
+        data_new.isetitem(j, obs_probs[obs_probs["variable"] == colname].groupby("obs").sample(weights = "prob", random_state = rng)["value"].reset_index(drop = True))
 
       else:
         # Continuous columns: Match estimated distribution parameters with r...() function
@@ -351,7 +359,7 @@ class arf:
          myclip_b = obs_params.loc[obs_params["variable"] == colname, "max"]
          myloc = obs_params.loc[obs_params["variable"] == colname, "mean"]
          myscale = obs_params.loc[obs_params["variable"] == colname, "sd"]
-         data_new.isetitem(j, scipy.stats.truncnorm(a =(myclip_a - myloc) / myscale,b = (myclip_b - myloc) / myscale, loc = myloc , scale = myscale ).rvs(size = n))
+         data_new.isetitem(j, scipy.stats.truncnorm(a =(myclip_a - myloc) / myscale,b = (myclip_b - myloc) / myscale, loc = myloc , scale = myscale ).rvs(size = n, random_state = rng))
          del(myclip_a,myclip_b,myloc,myscale)
         else:
           raise ValueError('Other distributions not yet implemented')
