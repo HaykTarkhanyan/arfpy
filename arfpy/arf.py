@@ -357,7 +357,7 @@ class arf:
           raise ValueError('Other distributions not yet implemented')
     
     # Use original column names
-    data_new = data_new.set_axis(self.orig_colnames, axis = 1, copy = False)
+    data_new = data_new.set_axis(self.orig_colnames, axis = 1)
     
     # Convert categories back to category   
     for col in self.orig_colnames:
