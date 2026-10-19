@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Add `random_state` to `arf()` and `forge()` for reproducible fitting and sampling; `None` keeps the previous behaviour (numpy's global random state)
 - Fix `forge()` failing with "probabilities do not sum to 1" when leaves hold a single observation: leaf coverage is renormalised within each tree (#4)
 - Fix `forde(oob=True)`, which referenced a missing attribute; out-of-bag rows now come from the public `estimators_samples_`
 - Drop the deprecated `copy=` argument of `DataFrame.set_axis` (pandas 3)
