@@ -2,7 +2,6 @@
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble._forest import _generate_unsampled_indices
 import scipy
 from arfpy import utils
 
@@ -196,11 +195,12 @@ class arf:
     # Get terminal nodes for all observations
     pred = self.clf.apply(self.x_real)
     
-    # If OOB, use only OOB trees
+    # If OOB, use only the real observations each tree did not draw (marked -1 below). The forest was fit on
+    # the real rows followed by the synthetic ones, so in-bag indices beyond the real rows are synthetic.
     if self.oob:
+      real_idx = np.arange(self.x_real.shape[0])
       for tree in range(self.num_trees):
-        idx_oob = np.isin(range(self.x_real.shape[0]), _generate_unsampled_indices(self.clf.estimators_[tree].random_state, self.x.shape[0], self.x.shape[0]))
-        pred[np.invert(idx_oob), tree] = -1
+        pred[np.isin(real_idx, self.clf.estimators_samples_[tree]), tree] = -1
     
     # Get probabilities of terminal nodes for each tree 
     # node_probs dims: [nodeid, tree]
@@ -212,8 +212,9 @@ class arf:
 
     bnds_2 = pd.DataFrame()
     for t in range(self.num_trees):
-      unique, freq = np.unique(pred[:,t], return_counts=True)
-      vv = pd.concat([pd.Series(unique, name = 'leaf'), pd.Series(freq/pred.shape[0], name = 'cvg')], axis = 1)
+      leaves_t = pred[:, t][pred[:, t] >= 0] # with oob = True, in-bag observations are marked -1
+      unique, freq = np.unique(leaves_t, return_counts=True)
+      vv = pd.DataFrame({'leaf': unique, 'cvg': freq / leaves_t.shape[0], 'n_obs': freq})
       zz = bnds[bnds['tree'] == t]
       bnds_2 =pd.concat([bnds_2,pd.merge(left=vv, right=zz, on=['leaf'])])
     bnds = bnds_2
@@ -221,13 +222,18 @@ class arf:
 
     # set coverage for nodes with single observations to zero
     if np.invert(self.factor_cols).any():
-      bnds.loc[bnds['cvg'] == 1/pred.shape[0],'cvg'] = 0
-    
+      bnds.loc[bnds['n_obs'] == 1,'cvg'] = 0
+
     # no parameters to learn for zero coverage leaves - drop zero coverage nodes
-    bnds = bnds[bnds['cvg'] > 0]
+    bnds = bnds[bnds['cvg'] > 0].drop(columns = 'n_obs')
 
     # rename leafs to nodeids
     bnds.rename(columns={'leaf': 'nodeid'}, inplace=True)
+
+    # Renormalise coverage within each tree. Dropping single-observation leaves leaves the remaining coverage of
+    # a tree summing to less than 1, so leaf probabilities in forge() did not sum to 1 (issue #4).
+    tree_cvg = bnds[['tree', 'nodeid', 'cvg']].drop_duplicates().groupby('tree')['cvg'].sum()
+    bnds['cvg'] = bnds['cvg'] / bnds['tree'].map(tree_cvg)
 
     # save bounds to later use coverage for drawing new samples
     self.bnds= bnds
@@ -309,8 +315,10 @@ class arf:
 
     # Sample new observations and get their terminal nodes
     # Draw random leaves with probability proportional to coverage
+    # Coverage sums to 1 within each tree, so dividing by the total picks a tree uniformly (among trees with any
+    # leaf left), then a leaf in proportion to its coverage.
     unique_bnds = self.bnds[['tree', 'nodeid', 'cvg']].drop_duplicates()
-    draws = np.random.choice(a=range(unique_bnds.shape[0]), p = unique_bnds['cvg'] / self.num_trees, size=n)
+    draws = np.random.choice(a=range(unique_bnds.shape[0]), p = unique_bnds['cvg'] / unique_bnds['cvg'].sum(), size=n)
     sampled_trees_nodes = unique_bnds[['tree','nodeid']].iloc[draws,].reset_index(drop =True).reset_index().rename(columns={'index': 'obs'})
 
     # Get distributions parameters for each new obs.

@@ -86,4 +86,5 @@ class TestClass:
 if __name__ == '__main__':
     from test_iris import TestIris
     from test_diabetes import TestDiabetes
+    from test_regressions import TestRegressions
     unittest.main()
